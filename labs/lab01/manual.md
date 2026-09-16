@@ -26,7 +26,11 @@ the bottom). Re-simulate with the same `tb.v`.
 **(c)** Add a constant delay to every gate in `FA_Gate.v` (e.g. `xor #(2) (ps, a, b);`).
 
 **Question:** Does the waveform change in task 1(b) or 1(c) when compared with task 1(a)? Explain your answer in terms of how Verilog gate-level statements actually execute
+**Answer:**
 
+**(b)** Nope, the waveform stays exactly the same even after shuffling the order of the five gates. Makes sense once you think about how Verilog actually simulates gate-level code these aren't like C statements that run one after another. Each xor/and/or here is basically its own little always on process that just reacts whenever its inputs change. The simulator figures out execution order based on signal changes, not based on which line comes first in the file. So writing them in a different order in the source doesn't change anything about how or when they actually fire during simulation.
+
+**(c)** This one does change. Once I added #2 to every gate, the outputs stopped lining up with the input transitions in time before, sum/cout would show up at the exact same timestamp as the input change (0, 5, 10...), but now they lag behind by a couple time units since each gate takes 2 units to actually produce its output. It gets more interesting for cout specifically, since it depends on pc1 and pc2, which themselves come from delayed gates so the delay stacks up through that chain. I could actually see cout flicker through an intermediate wrong-ish value for a couple time units before settling on the correct one, which is basically a mini ripple effect happening inside a single full adder.
 ---
 
 ## Task 2 - Structural 4-bit ripple-carry adder
@@ -49,7 +53,13 @@ from lecture. Simulate against `tb.v`.
    result. With delays now present, you should be able to see each carry
    settle a little later than the one before it — this is the ripple,
    now visible rather than just asserted in lecture.
+**Answers:**
 
+**Q1:** Checked pretty much every printed row against normal binary addition and everything matched for example 5+3+1=9 (sum=1001, cout=0), 10+5+0=15 (sum=1111, cout=0), and the 15+1 case correctly rolls over to sum=0000 with cout=1. So the ripple adder is arithmetically correct across the board.
+
+**Q2:** For the 7+1 case (a=0111, b=0001, cin=0), the expected result is 8 (sum=1000, cout=0), and that's what shows up but it's the most interesting transition to look at because it forces a carry through every single stage. Since 0111+1 flips every bit, each stage's carry-out (c1 from FA0, c2 from FA1, c3 from FA2) has to wait on the previous one before it can settle, because each FA_Gate now has a real #2 delay on every internal gate.
+
+You can actually see this in the waveform/output that instead of sum and cout snapping to their final value in one instant like in Task 1(a), they update over a few closely spaced timestamps as c1, then c2, then c3 propagate one after another, each about 2 time units behind the last. That's the ripple in "ripple-carry adder" actually happening in real time rather than being instant like it was without delays, every bit position genuinely has to wait for the carry from the one before it.
 
 ---
 
@@ -76,6 +86,8 @@ with the same `tb.v`.
 still be reasonable if you needed a 64-bit CLA? Concretely, how many
 literals would the AND term feeding the final carry need?
 
+**Answer** No, it wouldn't scale at all. Looking at the pattern in the carry equations, each bit's AND term needs one literal per propagate bit below it, plus cin. For a 64-bit CLA, the term feeding the final carry (c64) would need p63·p62·p61·...·p0·cin — that's 65 literals in a single AND gate. Writing that out by hand with named intermediate wires (like a1-a10 I did for the 4-bit version, just scaled up) would be completely unmanageable and error-prone. Real tools split this into hierarchical/block carry-lookahead instead of one massive flat equation.
+
 **(c) The same circuit, with `assign`.** Complete `cla4_dataflow.v` —
 the identical 4-bit CLA, rewritten using dataflow modeling (`assign`
 statements, each with its own delay) instead of gate primitives. Switch
@@ -85,10 +97,12 @@ statements, each with its own delay) instead of gate primitives. Switch
 count, readability, how directly each line maps to the Boolean equation it
 implements. Which would you rather maintain or debug six months from now?
 
+**Answer** cla4_dataflow.v is way shorter and cleaner, six assign lines that map almost one-to-one onto the actual Boolean equations. cla4.v needs around 25 separate gate instantiations plus a bunch of intermediate wires (a1 through a10) that don't carry any real meaning on their own, just there to break down each AND/OR into steps. I'd much rather maintain the dataflow version six months from now since I could actually read the equation directly off the code, whereas the gate-level version I'd have to mentally re-trace the wire names to figure out what's being computed.
+
 **Question (all three):** with all three options tested, compare how
 quickly each one's final `sum`/`cout` settle in the waveform on the same
 7+1 test vector.
-
+**Answer** Ran all three against the same 7+1 test vector. The ripple-carry adder (rca) was clearly the slowest to settle since the carry has to physically propagate through all four FA_Gate stages one at a time. The two carry-lookahead versions (cla4 and cla4_dataflow) settled noticeably faster and at basically the same time as each other, since both compute all four carries directly from the equations instead of waiting on each otherthat's the whole advantage of carry-lookahead over ripple-carry, and it's actually visible in the simulation timing here.
 ---
 
 ## Task 4 — Three ways to build a 64-bit adder
@@ -137,6 +151,11 @@ unlike part (a)'s carry equations). Set `dut.v` to Option 1 and simulate.
 3. `cla64_flat` and `cla64_blocked` should perform similarly *in this
    simulation*. Given that, why would a real chip still use the (b) design
    over the (a) design?
+   **Question 1:** Ran tb.v against all three versions. For the same input (a=00000000075bcd15, b=000000003ade68b1), the plain ripple adder (rca64) didn't finish settling until timestamp 112, while the blocked CLA version was already done by timestamp 102, about 10 time units faster on the exact same numbers.
+
+**Question 2:** Yeah, this lines up with what you'd expect from carry-lookahead theory. Ripple-carry basically scales linearly with bit width since the carry physically has to pass through up to 64 stages one at a time, whereas carry-lookahead breaks that dependency so it settles in way fewer levels of delay.
+
+**Question 3:** cla64_flat and cla64_blocked come out looking about the same speed-wise here, which makes sense since the simulator doesn't care how many inputs a gate has it just computes the equation regardless of size. But a real chip couldn't actually use the flat version, because equations like c[64] need a gate with 65 inputs, and real gates just don't go that high (usually capped around 4-8). So even though both work in simulation, only the blocked version (b) is something you could actually fabricate it splits the problem into 16 smaller 4-bit CLA blocks so no single gate needs an unreasonable number of inputs, at the cost of a bit of speed compared to the theoretical flat version.
 
 ---
 
