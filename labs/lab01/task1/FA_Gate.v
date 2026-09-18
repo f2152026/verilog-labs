@@ -16,10 +16,16 @@ module FA_Gate(
 );
   wire ps, pc1, pc2;
 
-  xor (ps,  a,   b);
-  and (pc1, a,   b);
-  xor (sum, cin, ps);
+  or  (cout, pc1, pc2); 
   and (pc2, cin, ps);
-  or  (cout, pc1, pc2);
+  xor (sum, cin, ps);
+  and (pc1, a,   b);
+  xor (ps,  a,   b);   
+
+  xor #(2) (ps,  a,   b);
+  and #(2) (pc1, a,   b);
+  xor #(2) (sum, cin, ps);
+  and #(2) (pc2, cin, ps);
+  or  #(2) (cout, pc1, pc2);
 
 endmodule
