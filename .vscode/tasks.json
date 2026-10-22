@@ -1,6 +1,5 @@
 {
   "version": "2.0.0",
-
   "inputs": [
     {
       "id": "lab",
@@ -16,9 +15,14 @@
       "id": "tb",
       "type": "promptString",
       "description": "Enter testbench file (e.g. tb_mux.v)"
+    },
+    {
+      "id": "top",
+      "type": "promptString",
+      "description": "Module to synthesize (leave blank if it has the same name as the file)",
+      "default": ""
     }
   ],
-
   "tasks": [
     {
       "label": "Compile (lab + task + testbench)",
@@ -35,6 +39,13 @@
       "type": "shell",
       "command": "./scripts/run.sh ${input:lab} ${input:task} ${input:tb}",
       "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Synthesize module in current file (Yosys)",
+      "type": "shell",
+      "command": "./scripts/synth.sh ${relativeFile} ${input:top}",
+      "group": "build",
       "problemMatcher": []
     }
   ]

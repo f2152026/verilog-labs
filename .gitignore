@@ -4,3 +4,6 @@
 
 # Editor
 #.vscode/settings.json
+
+# Synthesis output
+artefacts/

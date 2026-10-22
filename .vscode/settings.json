@@ -11,7 +11,8 @@
         "README.md": true,
         ".specstory": true,
         "classroom50-helper-extension": true,
-        "labs/lab*/*.png": true
+        "labs/lab*/*.png": true,
+        "classroom50": true
     },
     "github.copilot.chat.useInstructionFiles": true,
     "github.copilot.inlineSuggest.enable": false,
