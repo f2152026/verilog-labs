@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Part A - interface check (sensor_vote, parking_lot, occupancy_ctrl)",
+    "type": "io",
+    "setup": "true",
+    "run": "./scripts/check_exam.sh task1",
+    "expected": "TASK1 INTERFACE OK",
+    "comparison": "included",
+    "points": 0
+  },
+  {
+    "name": "Part B1 - testbench compiles and prints one RESULT line",
+    "type": "io",
+    "setup": "true",
+    "run": "./scripts/check_exam.sh task2",
+    "expected": "TASK2 INTERFACE OK",
+    "comparison": "included",
+    "points": 0
+  },
+  {
+    "name": "Part B2 - compiles, answers.md fields present",
+    "type": "io",
+    "setup": "true",
+    "run": "./scripts/check_exam.sh task3",
+    "expected": "TASK3",
+    "comparison": "included",
+    "points": 0
+  }
+]
