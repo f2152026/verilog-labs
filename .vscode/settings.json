@@ -12,15 +12,12 @@
         ".specstory": true,
         "classroom50-helper-extension": true,
         "labs/lab*/*.png": true,
-        "classroom50": true
+        "classroom50": true,
+        "proctor-extension": true,
+        ".proctor": true
     },
-    "github.copilot.chat.useInstructionFiles": true,
-    "github.copilot.inlineSuggest.enable": false,
-    "github.copilot.enable": {
-        "*": false
-    },
-    "github.copilot.nextEditSuggestions.enabled": false,
     "workbench.editorAssociations": {
         "*.md": "vscode.markdown.preview.editor"
-    }
+    },
+    "chat.disableAIFeatures": true
 }

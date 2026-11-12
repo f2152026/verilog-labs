@@ -8,17 +8,13 @@
       "extensions": [
         "mshr-h.veriloghdl",
         "lramseyer.vaporview",
-        "SpecStory.specstory-vscode",
-        "github.copilot",
-        "github.copilot-chat"
+        "-GitHub.copilot",
+        "-GitHub.copilot-chat"
       ],
       "settings": {
-        "github.copilot.chat.useInstructionFiles": true,
-        "github.copilot.inlineSuggest.enable": false,
-        "github.copilot.enable": {
-          "*": false
-        },
-        "github.copilot.nextEditSuggestions.enabled": false
+        "chat.disableAIFeatures": true,
+        "workbench.secondarySideBar.defaultVisibility": "visible",
+        "extensions.autoUpdate": false
       }
     }
   },

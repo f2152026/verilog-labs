@@ -1,0 +1,29 @@
+{
+  "course": "f215-2026-sem-1",
+  "exam": "verilog-lab-exam",
+  "firebase": {
+    "apiKey": "AIzaSyDYhglMG-XTs9mX5XDBTZKt2jMwYnuOHX8",
+    "projectId": "cndl-proctor"
+  },
+  "allowedExtensions": [
+    "bits-pilani.proctor",
+    "abivankenobi.classroom50-helper",
+    "mshr-h.veriloghdl",
+    "lramseyer.vaporview",
+    "github.codespaces"
+  ],
+  "allowedFiles": [
+    "labs/exam/task1/sensor_vote.v",
+    "labs/exam/task1/parking_lot.v",
+    "labs/exam/task1/occupancy_ctrl.v",
+    "labs/exam/task2/tb.v",
+    "labs/exam/task2/ticket_machine.v",
+    "labs/exam/task3/tb.v",
+    "labs/exam/task3/ticket_machine.v",
+    "labs/exam/task3/answers.md",
+    ".proctor/log.jsonl"
+  ],
+  "buildOutputs": ["artefacts"],
+  "syntaxSheet": "reference/syntax_sheet.md",
+  "gitPollSeconds": 5
+}

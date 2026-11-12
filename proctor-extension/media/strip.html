@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' __CSP__; script-src 'nonce-__NONCE__';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: var(--vscode-font-family, sans-serif); }
+  body { background: #c5221f; color: #fff; transition: background 0.15s; }
+  body.ok { background: #1e8e3e; }
+  body.setup { background: #5f6368; }
+  #wrap { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; padding: 10px 6px; box-sizing: border-box; text-align: center; gap: 8px; }
+  #big { font-size: 26px; font-weight: 800; letter-spacing: 1px; line-height: 1.1; margin-top: 8px; }
+  #clock { font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .id { font-size: 13px; font-weight: 600; word-break: break-all; }
+  .small { font-size: 12px; opacity: 0.95; }
+  #reason { font-size: 13px; font-weight: 700; background: rgba(0,0,0,0.25); padding: 4px; border-radius: 4px; }
+  input { width: 90%; padding: 4px; font-size: 13px; border: 0; border-radius: 3px; }
+  button { padding: 5px 8px; font-size: 12px; border: 0; border-radius: 3px; cursor: pointer; background: #fff; color: #222; }
+  .hidden { display: none !important; }
+  #sheet { margin-top: auto; }
+</style>
+</head>
+<body class="setup">
+<div id="wrap">
+  <div id="setupBox" class="hidden">
+    <div class="small"><b>Exam setup</b></div>
+    <div class="small" style="margin-top:6px">Room</div>
+    <input id="room" autocomplete="off">
+    <div class="small" style="margin-top:6px">Seat</div>
+    <input id="seat" autocomplete="off">
+    <div style="margin-top:8px"><button id="go">Next</button></div>
+  </div>
+  <div id="calibBox" class="hidden small">
+    <b>Now enter full screen</b><br><br>
+    Press <b>F11</b><br>(Mac: <b>Ctrl+Cmd+F</b>).<br><br>
+    If the browser is already full screen, press it twice.<br><br>
+    Do not zoom the browser during the exam.
+  </div>
+  <div id="monBox" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%">
+    <div id="big">OK</div>
+    <div id="clock">--:--:--</div>
+    <div class="id" id="who"></div>
+    <div class="small" id="where"></div>
+    <div id="reason" class="hidden"></div>
+    <div class="small" id="viol"></div>
+  </div>
+  <button id="sheet">Syntax sheet</button>
+</div>
+<script nonce="__NONCE__">
+(function () {
+  const vscode = acquireVsCodeApi();
+  const $ = (id) => document.getElementById(id);
+  let S = { calibrated: false, hMax: 0, problems: [], violations: 0, user: '', room: '', seat: '' };
+  let mode = 'wait';           // wait | setup | calib | monitor
+  let h0 = 0, fsOk = null, awayStart = 0, tabAway = 0;
+  let dpr = window.devicePixelRatio;
+  const H = () => window.innerHeight;
+  const scr = () => ({ w: screen.width, h: screen.height, aw: screen.availWidth, ah: screen.availHeight, dpr: window.devicePixelRatio });
+
+  function show(which) {
+    ['setupBox', 'calibBox', 'monBox'].forEach((b) => $(b).classList.toggle('hidden', b !== which));
+  }
+
+  function paint() {
+    const localProblems = [];
+    if (mode === 'monitor' && fsOk === false) localProblems.push('not full screen');
+    if (document.visibilityState !== 'visible') localProblems.push('tab not visible');
+    const all = Array.from(new Set(S.problems.concat(localProblems)));
+    const ok = mode === 'monitor' && all.length === 0;
+    document.body.className = mode === 'monitor' ? (ok ? 'ok' : '') : 'setup';
+    $('big').textContent = ok ? 'EXAM OK' : 'CHECK';
+    $('reason').textContent = all.join(' | ');
+    $('reason').classList.toggle('hidden', ok);
+    $('who').textContent = S.user;
+    $('where').textContent = 'Room ' + (S.room || '?') + ' / Seat ' + (S.seat || '?');
+    $('viol').textContent = 'Flags: ' + S.violations;
+  }
+
+  function tick() {
+    const d = new Date();
+    $('clock').textContent = d.toTimeString().slice(0, 8);
+  }
+  setInterval(tick, 1000); tick();
+
+  function checkFs() {
+    if (mode === 'calib') {
+      if (H() >= h0 + 30) {
+        const hNow = H();
+        setTimeout(() => {           // wait for the resize to settle
+          if (mode !== 'calib' || H() < hNow) return;
+          S.hMax = H(); S.calibrated = true; mode = 'monitor'; fsOk = true;
+          vscode.postMessage({ type: 'calibrated', h0, hMax: S.hMax, dpr: window.devicePixelRatio, screen: scr() });
+          show('monBox'); paint();
+        }, 800);
+      }
+      return;
+    }
+    if (mode !== 'monitor') return;
+    if (H() > S.hMax + 2) {            // larger than calibrated: accept as new maximum
+      S.hMax = H();
+      vscode.postMessage({ type: 'calibrated', h0: S.hMax, hMax: S.hMax, dpr: window.devicePixelRatio, screen: scr() });
+    }
+    const ok = H() >= S.hMax - 2;
+    if (ok !== fsOk) {
+      if (fsOk !== null || !ok) {
+        vscode.postMessage({ type: 'fullscreen', ok, h: H(), hMax: S.hMax, awayMs: ok && awayStart ? Date.now() - awayStart : 0 });
+      }
+      awayStart = ok ? 0 : Date.now();
+      fsOk = ok;
+    }
+    paint();
+  }
+
+  new ResizeObserver(checkFs).observe(document.documentElement);
+  window.addEventListener('resize', checkFs);
+
+  document.addEventListener('visibilitychange', () => {
+    const visible = document.visibilityState === 'visible';
+    if (!visible) tabAway = Date.now();
+    vscode.postMessage({ type: 'visibility', visible, awayMs: visible && tabAway ? Date.now() - tabAway : 0 });
+    paint();
+  });
+
+  function watchZoom() {
+    const mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+    mq.addEventListener('change', () => {
+      if (window.devicePixelRatio !== dpr) {
+        dpr = window.devicePixelRatio;
+        vscode.postMessage({ type: 'zoom', dpr });
+      }
+      watchZoom();
+    }, { once: true });
+  }
+  watchZoom();
+
+  $('go').addEventListener('click', () => {
+    const room = $('room').value.trim(), seat = $('seat').value.trim();
+    if (!room || !seat) return;
+    S.room = room; S.seat = seat;
+    vscode.postMessage({ type: 'setup', room, seat, screen: scr() });
+    h0 = H(); mode = 'calib'; show('calibBox'); paint();
+  });
+  $('sheet').addEventListener('click', () => vscode.postMessage({ type: 'openSheet' }));
+
+  window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (m.type === 'init') {
+      Object.assign(S, m);
+      if (mode === 'wait') {
+        if (!S.room || !S.seat) { mode = 'setup'; show('setupBox'); }
+        else if (!S.calibrated) { h0 = H(); mode = 'calib'; show('calibBox'); }
+        else { mode = 'monitor'; show('monBox'); fsOk = null; checkFs(); }
+      }
+      paint();
+    } else if (m.type === 'host') {
+      S.problems = m.problems; S.violations = m.violations; paint();
+    }
+  });
+  vscode.postMessage({ type: 'ready' });
+})();
+</script>
+</body>
+</html>

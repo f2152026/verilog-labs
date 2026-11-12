@@ -1,57 +1,27 @@
 #!/usr/bin/env bash
-# Scripts to install the Classroom 50 Helper extension at the command and filesystem levels.
-# This ensures it works seamlessly in browser-based GitHub Codespaces and Desktop VS Code.
-
+# Install the course extensions (Classroom 50 Helper, Exam Proctor) from their VSIX files,
+# both through the 'code' CLI and by extracting into the extensions folder, so that they
+# load in browser-based GitHub Codespaces as well as in desktop VS Code.
 set -e
+shopt -s nullglob
 
-# Find the packaged VSIX file
-VSIX_FILE=$(ls classroom50-helper-extension/*.vsix 2>/dev/null | head -n 1)
+for VSIX_FILE in classroom50-helper-extension/*.vsix proctor-extension/*.vsix; do
+  echo "Installing extension from: $VSIX_FILE"
+  if command -v code &> /dev/null; then code --install-extension "$VSIX_FILE" --force || true; fi
+  if command -v code-insiders &> /dev/null; then code-insiders --install-extension "$VSIX_FILE" --force || true; fi
 
-if [ -z "$VSIX_FILE" ]; then
-  echo "⚠️ Warning: No VSIX file found under classroom50-helper-extension/."
-  exit 0
-fi
-
-echo "Installing extension from: $VSIX_FILE"
-
-# 1. Standard CLI Installation (If VS Code Server CLI is ready and in PATH)
-if command -v code &> /dev/null; then
-  echo "Installing via 'code' CLI..."
-  code --install-extension "$VSIX_FILE" --force || true
-fi
-
-if command -v code-insiders &> /dev/null; then
-  echo "Installing via 'code-insiders' CLI..."
-  code-insiders --install-extension "$VSIX_FILE" --force || true
-fi
-
-# 2. Filesystem-Level Extraction (Guarantees load in browser Codespaces)
-EXT_DIR_NAME="bits-pilani.classroom50-helper-0.0.1"
-
-# We check both vscode-remote and vscode-server extensions directories
-for EXT_DIR in "/home/vscode/.vscode-remote/extensions" "/home/vscode/.vscode-server/extensions"; do
-  mkdir -p "$EXT_DIR"
-  TARGET_PATH="$EXT_DIR/$EXT_DIR_NAME"
-  
-  echo "Extracting VSIX to target: $TARGET_PATH"
-  rm -rf "$TARGET_PATH"
-  mkdir -p "$TARGET_PATH"
-  
-  # Extract VSIX contents (VSIX is a standard ZIP file containing an 'extension' folder)
   TMP_EXTRACT="/tmp/vsix-extract-$$"
-  mkdir -p "$TMP_EXTRACT"
-  
-  if command -v unzip &> /dev/null; then
-    unzip -q "$VSIX_FILE" -d "$TMP_EXTRACT"
-    cp -r "$TMP_EXTRACT/extension/"* "$TARGET_PATH/"
-  else
-    echo "❌ Error: 'unzip' utility is not installed in the container."
-    rm -rf "$TMP_EXTRACT"
-    exit 1
-  fi
-  
-  rm -rf "$TMP_EXTRACT"
-  echo "✔ Successfully extracted to $TARGET_PATH"
-done
+  rm -rf "$TMP_EXTRACT"; mkdir -p "$TMP_EXTRACT"
+  unzip -q "$VSIX_FILE" -d "$TMP_EXTRACT"
+  EXT_DIR_NAME=$(python3 -c "import json,sys; p=json.load(open(sys.argv[1])); print(f\"{p['publisher']}.{p['name']}-{p['version']}\")" "$TMP_EXTRACT/extension/package.json")
 
-echo "🎉 Extension installation completed successfully!"
+  for EXT_DIR in "/home/vscode/.vscode-remote/extensions" "/home/vscode/.vscode-server/extensions"; do
+    mkdir -p "$EXT_DIR"
+    TARGET_PATH="$EXT_DIR/$EXT_DIR_NAME"
+    rm -rf "$TARGET_PATH"; mkdir -p "$TARGET_PATH"
+    cp -r "$TMP_EXTRACT/extension/"* "$TARGET_PATH/"
+    echo "✔ Extracted to $TARGET_PATH"
+  done
+  rm -rf "$TMP_EXTRACT"
+done
+echo "🎉 Extension installation completed."

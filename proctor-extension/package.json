@@ -1,0 +1,29 @@
+{
+  "name": "proctor",
+  "displayName": "Exam Proctor",
+  "description": "Full-screen strip, tab-switch, extension and file-change logging for lab exams.",
+  "publisher": "bits-pilani",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "repository": { "type": "git", "url": "https://github.com/f2152026/verilog-labs" },
+  "engines": { "vscode": "^1.104.0" },
+  "extensionKind": ["workspace"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "secondarySidebar": [
+        { "id": "proctor", "title": "Exam", "icon": "media/eye.svg" }
+      ]
+    },
+    "views": {
+      "proctor": [
+        { "type": "webview", "id": "proctor.strip", "name": "Exam monitor" }
+      ]
+    },
+    "commands": [
+      { "command": "proctor.show", "title": "Proctor: Show exam monitor" },
+      { "command": "proctor.openSheet", "title": "Proctor: Open syntax sheet" }
+    ]
+  }
+}
