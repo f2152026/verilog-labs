@@ -10,7 +10,9 @@
     "abivankenobi.classroom50-helper",
     "mshr-h.veriloghdl",
     "lramseyer.vaporview",
-    "github.codespaces"
+    "github.codespaces",
+    "github.github-vscode-theme",
+    "github.vscode-pull-request-github"
   ],
   "allowedFiles": [
     "labs/exam/task1/sensor_vote.v",

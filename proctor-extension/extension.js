@@ -270,21 +270,58 @@ async function commitAndPush(message) {
 }
 
 let baseCommit = null;
-// Every path touched since the starter commit: working tree + every commit in between,
-// so a file that was changed and later restored still counts.
-async function touchedPaths() {
-  const s = await sh('git', ['status', '--porcelain', '-uall', '-z']);
+// A path counts as changed when its content (as git would store it) differs from the
+// baseline: the state when the extension first ran in this codespace. Files that codespace
+// setup already touched (line endings, chmod) are part of the baseline, and mode-only
+// changes are ignored. Every commit since the baseline is checked too, so a change that
+// was committed and later undone still counts.
+const DEL = 'DELETED';
+let baseline = {};                 // path -> blob at first run, for paths dirty at first run
+const baseBlobCache = new Map();
+async function hashFile(p) {
+  if (!fs.existsSync(path.join(root, p))) return DEL;
+  const h = await sh('git', ['hash-object', '--', p]);
+  return h.ok ? h.out.trim() : DEL;
+}
+async function baseBlob(p) {
+  if (p in baseline) return baseline[p];
+  if (baseBlobCache.has(p)) return baseBlobCache.get(p);
+  const r = await sh('git', ['rev-parse', '--verify', '-q', baseCommit + ':' + p]);
+  const v = r.ok ? r.out.trim() : DEL;
+  baseBlobCache.set(p, v);
+  return v;
+}
+async function dirtyPaths() {
+  const s = await sh('git', ['-c', 'core.fileMode=false', 'status', '--porcelain', '-uall', '-z']);
   const out = new Set();
   const parts = s.out.split('\0');
   for (let i = 0; i < parts.length; i++) {
     const e = parts[i];
     if (!e) continue;
     out.add(e.slice(3));
-    if (e[0] === 'R' || e[0] === 'C') { out.add(parts[i + 1]); i++; }   // rename: both names
+    if (e[0] === 'R' || e[0] === 'C') { out.add(parts[i + 1]); i++; }
+  }
+  return [...out];
+}
+async function makeBaseline() {
+  const b = {};
+  for (const p of await dirtyPaths()) b[p] = await hashFile(p);
+  return b;
+}
+async function touchedPaths() {
+  const out = new Set();
+  for (const p of await dirtyPaths()) {
+    if (fileAllowed(p)) continue;
+    if ((await hashFile(p)) !== (await baseBlob(p))) out.add(p);
   }
   if (baseCommit) {
-    const d = await sh('git', ['log', '--format=', '--name-only', '--no-renames', '-z', baseCommit + '..HEAD']);
-    for (const f of d.out.split(/[\0\n]/)) if (f) out.add(f);
+    const d = await sh('git', ['log', '--format=', '--raw', '--no-renames', '--no-abbrev', baseCommit + '..HEAD']);
+    for (const line of d.out.split('\n')) {
+      const m = line.match(/^:\d+ \d+ [0-9a-f]+ ([0-9a-f]+) \w+\t(.*)$/);
+      if (!m || fileAllowed(m[2]) || out.has(m[2])) continue;
+      const blob = /^0+$/.test(m[1]) ? DEL : m[1];
+      if (blob !== (await baseBlob(m[2]))) out.add(m[2]);
+    }
   }
   return [...out];
 }
@@ -378,9 +415,16 @@ async function activate(context) {
   // Base for "what changed": HEAD when the extension first ran in this codespace
   // (i.e. the starter state), kept across reloads.
   baseCommit = context.globalState.get('proctor.base', null);
+  baseline = context.globalState.get('proctor.baseline', {});
   if (!baseCommit) {
     const b = await sh('git', ['rev-parse', 'HEAD']);
-    if (b.ok) { baseCommit = b.out.trim(); await context.globalState.update('proctor.base', baseCommit); }
+    if (b.ok) {
+      baseCommit = b.out.trim();
+      baseline = await makeBaseline();
+      await context.globalState.update('proctor.base', baseCommit);
+      await context.globalState.update('proctor.baseline', baseline);
+      logEvent('baseline', { commit: baseCommit, dirtyAtStart: Object.keys(baseline) });
+    }
   }
 
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1000);
