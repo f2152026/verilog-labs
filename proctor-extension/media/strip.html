@@ -6,22 +6,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: var(--vscode-font-family, sans-serif); }
-  body { background: #c5221f; color: #fff; transition: background 0.15s; }
-  body.ok { background: #1e8e3e; }
-  body.setup { background: #5f6368; }
+  body { background: #3c4043; color: #fff; }
   #wrap { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100%; padding: 10px 6px; box-sizing: border-box; text-align: center; gap: 8px; }
-  #big { font-size: 26px; font-weight: 800; letter-spacing: 1px; line-height: 1.1; margin-top: 8px; }
+  #big { font-size: 20px; font-weight: 800; letter-spacing: 1px; line-height: 1.1; margin-top: 8px; }
   #clock { font-size: 22px; font-variant-numeric: tabular-nums; font-weight: 700; }
   .id { font-size: 13px; font-weight: 600; word-break: break-all; }
   .small { font-size: 12px; opacity: 0.95; }
-  #reason { font-size: 13px; font-weight: 700; background: rgba(0,0,0,0.25); padding: 4px; border-radius: 4px; }
   input { width: 90%; padding: 4px; font-size: 13px; border: 0; border-radius: 3px; }
   button { padding: 5px 8px; font-size: 12px; border: 0; border-radius: 3px; cursor: pointer; background: #fff; color: #222; }
   .hidden { display: none !important; }
   #sheet { margin-top: auto; }
 </style>
 </head>
-<body class="setup">
+<body>
 <div id="wrap">
   <div id="setupBox" class="hidden">
     <div class="small"><b>Exam setup</b></div>
@@ -38,12 +35,11 @@
     Do not zoom the browser during the exam.
   </div>
   <div id="monBox" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%">
-    <div id="big">OK</div>
+    <div id="big">EXAM<br>MONITOR</div>
     <div id="clock">--:--:--</div>
     <div class="id" id="who"></div>
     <div class="small" id="where"></div>
-    <div id="reason" class="hidden"></div>
-    <div class="small" id="viol"></div>
+    <div class="small" style="margin-top:6px">Keep this pane open and the browser in full screen. Status is shown in the bottom bar.</div>
   </div>
   <button id="sheet">Syntax sheet</button>
 </div>
@@ -51,7 +47,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const $ = (id) => document.getElementById(id);
-  let S = { calibrated: false, hMax: 0, problems: [], violations: 0, user: '', room: '', seat: '' };
+  let S = { calibrated: false, hMax: 0, user: '', room: '', seat: '' };
   let mode = 'wait';           // wait | setup | calib | monitor
   let h0 = 0, fsOk = null, awayStart = 0, tabAway = 0;
   let dpr = window.devicePixelRatio;
@@ -63,18 +59,8 @@
   }
 
   function paint() {
-    const localProblems = [];
-    if (mode === 'monitor' && fsOk === false) localProblems.push('not full screen');
-    if (document.visibilityState !== 'visible') localProblems.push('tab not visible');
-    const all = Array.from(new Set(S.problems.concat(localProblems)));
-    const ok = mode === 'monitor' && all.length === 0;
-    document.body.className = mode === 'monitor' ? (ok ? 'ok' : '') : 'setup';
-    $('big').textContent = ok ? 'EXAM OK' : 'CHECK';
-    $('reason').textContent = all.join(' | ');
-    $('reason').classList.toggle('hidden', ok);
     $('who').textContent = S.user;
     $('where').textContent = 'Room ' + (S.room || '?') + ' / Seat ' + (S.seat || '?');
-    $('viol').textContent = 'Flags: ' + S.violations;
   }
 
   function tick() {
@@ -153,8 +139,6 @@
         else { mode = 'monitor'; show('monBox'); fsOk = null; checkFs(); }
       }
       paint();
-    } else if (m.type === 'host') {
-      S.problems = m.problems; S.violations = m.violations; paint();
     }
   });
   vscode.postMessage({ type: 'ready' });

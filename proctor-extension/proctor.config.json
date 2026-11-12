@@ -23,7 +23,10 @@
     "labs/exam/task3/answers.md",
     ".proctor/log.jsonl"
   ],
-  "buildOutputs": ["artefacts"],
+  "buildOutputs": [
+    "artefacts"
+  ],
   "syntaxSheet": "reference/syntax_sheet.md",
-  "gitPollSeconds": 5
+  "gitPollSeconds": 5,
+  "resetPollSeconds": 20
 }

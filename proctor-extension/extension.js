@@ -1,14 +1,18 @@
 // Exam Proctor extension (plain JavaScript, no dependencies).
 //
 // What it does
-//  1. A thin strip in the secondary side bar. After a one-time room/seat prompt and
-//     a full-screen calibration, it is GREEN while the browser stays full screen and
-//     the tab is visible, RED otherwise. The status bar mirrors the colour.
-//  2. Logs every violation (left full screen, tab hidden, pane hidden, zoom change,
-//     extra extension, AI features re-enabled, change to a non-whitelisted file) to
-//     Firestore: <course>/<github user>/events/<auto id>, and to .proctor/log.jsonl.
-//  3. Commits and pushes the repository after every build (new simulation binary
-//     under artefacts/) and immediately when a non-whitelisted file changes.
+//  1. A thin pane in the secondary side bar asks for room/seat once, calibrates the
+//     full-screen height (F11), then watches the pane height and tab visibility.
+//  2. The STATUS BAR is the only indicator. It shows four counts and turns red as soon
+//     as any is above 0 (or the pane is hidden / setup is not done):
+//       full screen left (incl. pane hidden) and tab switches in this codespace session,
+//       non-whitelisted files ever changed in the repo history, disallowed extensions
+//       (+1 if AI features are switched on).
+//     The two session counts are reset only from Firestore: set field resetAt
+//     (timestamp) in the document <course>/<github user>.
+//  3. Every event goes to Firestore <course>/<user>/events/<auto id> and to
+//     .proctor/log.jsonl; the repo is committed and pushed after every build and
+//     immediately when a non-whitelisted file changes.
 'use strict';
 const vscode = require('vscode');
 const fs = require('fs');
@@ -22,8 +26,7 @@ let root = null;                 // workspace folder path
 let view = null;                 // WebviewView
 let statusItem = null;
 let ident = {};                  // user, repo, codespace, session
-let problems = new Map();        // reason key -> text   (anything here => RED)
-let violations = 0;
+const C = { fsNow: false, paneHidden: true, tabHidden: false, badFiles: [], extras: [], ai: false };
 const queueKey = 'proctor.queue';
 
 // ---------------------------------------------------------------- utilities
@@ -95,7 +98,6 @@ function logEvent(type, detail = {}, isViolation = false) {
     room: st.get('proctor.room', ''), seat: st.get('proctor.seat', ''),
     clientTime: now(),
   };
-  if (isViolation) violations++;
   try {
     fs.mkdirSync(path.join(root, '.proctor'), { recursive: true });
     fs.appendFileSync(path.join(root, '.proctor', 'log.jsonl'), JSON.stringify(ev) + '\n');
@@ -105,27 +107,41 @@ function logEvent(type, detail = {}, isViolation = false) {
   st.update(queueKey, q).then(flushQueue);
 }
 
-// ---------------------------------------------------------------- red / green
-function setProblem(key, text) {
-  if (text) problems.set(key, text); else problems.delete(key);
+// ---------------------------------------------------------------- status bar
+function counts() {
+  const st = ctx.globalState;
+  return { fs: st.get('proctor.fsCount', 0), tab: st.get('proctor.tabCount', 0),
+           files: C.badFiles.length, ext: C.extras.length + (C.ai ? 1 : 0) };
+}
+
+async function bump(key) {
+  await ctx.globalState.update(key, ctx.globalState.get(key, 0) + 1);
   render();
 }
 
 function render() {
-  const ok = problems.size === 0 && ctx.globalState.get('proctor.calibrated', false);
-  const msg = [...problems.values()].join(' | ');
-  if (statusItem) {
-    statusItem.text = ok ? '$(pass-filled) EXAM OK' : '$(error) EXAM: ' + (msg || 'setup needed');
-  }
+  if (!statusItem) return;
+  const calibrated = ctx.globalState.get('proctor.calibrated', false);
+  const c = counts();
+  const ok = calibrated && !c.fs && !c.tab && !c.files && !c.ext && !C.fsNow && !C.tabHidden && !C.paneHidden;
+  const tally = `Full screen left ${c.fs} · Tab switches ${c.tab} · Files ${c.files} · Extensions ${c.ext}`;
+  let text = calibrated ? (ok ? '$(pass-filled) EXAM OK   ' : '$(error) EXAM   ') + tally
+                        : '$(warning) EXAM SETUP: enter room/seat in the Exam pane, then press F11';
+  if (C.paneHidden) text += ' · EXAM PANE HIDDEN';
+  statusItem.text = text;
+  const tip = [];
+  if (C.badFiles.length) tip.push('Files changed that are not answer files:\n  ' + C.badFiles.join('\n  '));
+  if (C.extras.length) tip.push('Extensions not allowed:\n  ' + C.extras.join('\n  '));
+  if (C.ai) tip.push('AI features are switched on');
+  statusItem.tooltip = tip.join('\n\n') || 'Exam monitor';
   const colors = ok
-    ? { 'statusBar.background': '#1e8e3e', 'statusBar.foreground': '#ffffff' }
-    : { 'statusBar.background': '#c5221f', 'statusBar.foreground': '#ffffff' };
+    ? { 'statusBar.background': '#1e8e3e', 'statusBar.foreground': '#ffffff', 'statusBar.noFolderBackground': '#1e8e3e' }
+    : { 'statusBar.background': '#c5221f', 'statusBar.foreground': '#ffffff', 'statusBar.noFolderBackground': '#c5221f' };
   const cc = vscode.workspace.getConfiguration('workbench');
   const cur = cc.get('colorCustomizations') || {};
   if (cur['statusBar.background'] !== colors['statusBar.background']) {
     cc.update('colorCustomizations', { ...cur, ...colors }, vscode.ConfigurationTarget.Global).then(undefined, () => {});
   }
-  post({ type: 'host', problems: [...problems.values()], violations });
 }
 
 function post(msg) { if (view) view.webview.postMessage(msg).then(undefined, () => {}); }
@@ -145,16 +161,19 @@ class StripProvider {
     v.webview.options = { enableScripts: true };
     v.webview.html = stripHtml(v.webview);
     v.webview.onDidReceiveMessage(onWebviewMessage);
+    const hidden = (why) => {
+      if (C.paneHidden) return;
+      C.paneHidden = true;
+      logEvent(why, {}, true);
+      if (ctx.globalState.get('proctor.calibrated', false)) bump('proctor.fsCount'); else render();
+    };
     v.onDidChangeVisibility(() => {
-      if (v.visible) { setProblem('pane', null); logEvent('pane_visible'); sendInit(); }
-      else { setProblem('pane', 'monitor pane hidden'); logEvent('pane_hidden', {}, true); }
+      if (v.visible) { C.paneHidden = false; logEvent('pane_visible'); sendInit(); render(); }
+      else hidden('pane_hidden');
     });
-    v.onDidDispose(() => {
-      view = null;
-      setProblem('pane', 'monitor pane closed');
-      logEvent('pane_closed', {}, true);
-    });
-    setProblem('pane', null);
+    v.onDidDispose(() => { view = null; hidden('pane_closed'); });
+    C.paneHidden = false;
+    render();
   }
 }
 
@@ -166,7 +185,6 @@ function sendInit() {
     room: st.get('proctor.room', ''), seat: st.get('proctor.seat', ''),
     calibrated: st.get('proctor.calibrated', false),
     hMax: st.get('proctor.hMax', 0),
-    problems: [...problems.values()], violations,
   });
 }
 
@@ -186,12 +204,12 @@ async function onWebviewMessage(m) {
       render();
       break;
     case 'fullscreen':
-      if (m.ok) { setProblem('fs', null); logEvent('fullscreen_restored', { h: m.h, hMax: m.hMax, awayMs: m.awayMs }); }
-      else { setProblem('fs', 'not full screen'); logEvent('fullscreen_left', { h: m.h, hMax: m.hMax }, true); }
+      if (m.ok) { C.fsNow = false; logEvent('fullscreen_restored', { h: m.h, hMax: m.hMax, awayMs: m.awayMs }); render(); }
+      else { C.fsNow = true; logEvent('fullscreen_left', { h: m.h, hMax: m.hMax }, true); await bump('proctor.fsCount'); }
       break;
     case 'visibility':
-      if (m.visible) { setProblem('tab', null); logEvent('tab_visible', { awayMs: m.awayMs }); }
-      else { setProblem('tab', 'tab not visible'); logEvent('tab_hidden', {}, true); }
+      if (m.visible) { C.tabHidden = false; logEvent('tab_visible', { awayMs: m.awayMs }); render(); }
+      else { C.tabHidden = true; logEvent('tab_hidden', {}, true); await bump('proctor.tabCount'); }
       break;
     case 'zoom':
       logEvent('zoom_changed', { dpr: m.dpr }, true);
@@ -223,7 +241,8 @@ function auditExtensions(first) {
   for (const id of extra) {
     if (!reportedExt.has(id)) { reportedExt.add(id); logEvent('extension_not_allowed', { id }, true); }
   }
-  setProblem('ext', extra.length ? 'remove extension: ' + extra.join(', ') : null);
+  C.extras = extra;
+  render();
 }
 
 function auditAI(first) {
@@ -231,8 +250,8 @@ function auditAI(first) {
   if (!disabled) {
     if (first || !auditAI.flagged) logEvent('ai_features_enabled', {}, true);
     auditAI.flagged = true;
-    setProblem('ai', 'AI features enabled');
-  } else { auditAI.flagged = false; setProblem('ai', null); }
+    C.ai = true; render();
+  } else { auditAI.flagged = false; C.ai = false; render(); }
 }
 
 // ---------------------------------------------------------------- git: whitelist + autocommit
@@ -251,31 +270,62 @@ async function commitAndPush(message) {
 }
 
 let baseCommit = null;
-let reportedFiles = new Set();
-async function changedPaths() {
+// Every path touched since the starter commit: working tree + every commit in between,
+// so a file that was changed and later restored still counts.
+async function touchedPaths() {
   const s = await sh('git', ['status', '--porcelain', '-uall', '-z']);
   const out = new Set();
   const parts = s.out.split('\0');
   for (let i = 0; i < parts.length; i++) {
     const e = parts[i];
     if (!e) continue;
-    const code = e.slice(0, 2);
     out.add(e.slice(3));
-    if (code[0] === 'R' || code[0] === 'C') { out.add(parts[i + 1]); i++; }   // rename: both names
+    if (e[0] === 'R' || e[0] === 'C') { out.add(parts[i + 1]); i++; }   // rename: both names
   }
   if (baseCommit) {
-    const d = await sh('git', ['diff', '--name-only', '-z', baseCommit, 'HEAD']);
-    for (const f of d.out.split('\0')) if (f) out.add(f);
+    const d = await sh('git', ['log', '--format=', '--name-only', '--no-renames', '-z', baseCommit + '..HEAD']);
+    for (const f of d.out.split(/[\0\n]/)) if (f) out.add(f);
   }
   return [...out];
 }
 
 async function checkFiles() {
-  const bad = (await changedPaths()).filter((f) => !fileAllowed(f) && !reportedFiles.has(f));
-  if (!bad.length) return;
-  bad.forEach((f) => reportedFiles.add(f));
-  logEvent('file_not_allowed', { files: bad.slice(0, 50) }, true);
-  await commitAndPush('proctor: non-whitelisted change: ' + bad.slice(0, 5).join(', '));
+  const known = new Set(ctx.globalState.get('proctor.badFiles', []));
+  const fresh = (await touchedPaths()).filter((f) => !fileAllowed(f) && !known.has(f));
+  if (fresh.length) {
+    fresh.forEach((f) => known.add(f));
+    await ctx.globalState.update('proctor.badFiles', [...known]);
+    logEvent('file_not_allowed', { files: fresh.slice(0, 50) }, true);
+  }
+  C.badFiles = [...known].sort();
+  render();
+  if (fresh.length) await commitAndPush('proctor: non-whitelisted change: ' + fresh.slice(0, 5).join(', '));
+}
+
+// ---------------------------------------------------------------- reset from Firestore
+async function checkReset() {
+  const fb = CFG.firebase;
+  const url = CFG.testResetEndpoint ||
+    `https://firestore.googleapis.com/v1/projects/${fb.projectId}/databases/(default)/documents/` +
+    `${encodeURIComponent(CFG.course)}/${encodeURIComponent(ident.user)}?key=${fb.apiKey}`;
+  let doc;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return;                       // 404: no reset document for this student
+    doc = await r.json();
+  } catch { return; }
+  const f = (doc.fields || {}).resetAt;
+  if (!f) return;
+  const ms = Date.parse(f.timestampValue || f.stringValue || '') || Number(f.integerValue || 0);
+  const st = ctx.globalState;
+  if (ms && ms > st.get('proctor.lastReset', 0)) {
+    const before = counts();
+    await st.update('proctor.lastReset', ms);
+    await st.update('proctor.fsCount', 0);
+    await st.update('proctor.tabCount', 0);
+    logEvent('reset_applied', { resetAt: new Date(ms).toISOString(), fsBefore: before.fs, tabBefore: before.tab });
+    render();
+  }
 }
 
 let lastBuild = 0;
@@ -347,7 +397,6 @@ async function activate(context) {
   );
 
   logEvent('session_start', { vscode: vscode.version, platform: process.platform });
-  setProblem('pane', 'monitor pane not open');
   auditExtensions(true);
   auditAI(true);
   render();
@@ -364,7 +413,9 @@ async function activate(context) {
   };
   const t = setInterval(poll, (CFG.gitPollSeconds || 5) * 1000);
   const t2 = setInterval(() => auditExtensions(false), 30000);
-  context.subscriptions.push({ dispose: () => { clearInterval(t); clearInterval(t2); } });
+  const t3 = setInterval(checkReset, (CFG.resetPollSeconds || 20) * 1000);
+  context.subscriptions.push({ dispose: () => { clearInterval(t); clearInterval(t2); clearInterval(t3); } });
+  checkReset();
   poll();
 }
 
@@ -372,4 +423,4 @@ function deactivate() {
   if (ctx) logEvent('session_end', {});
 }
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, _test: { onWebviewMessage: (m) => onWebviewMessage(m), counts: () => counts(), status: () => statusItem && statusItem.text } };
