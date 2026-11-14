@@ -30,5 +30,6 @@
   ],
   "syntaxSheet": "reference/syntax_sheet.md",
   "gitPollSeconds": 5,
-  "resetPollSeconds": 20
+  "resetPollSeconds": 20,
+  "timezone": "Asia/Kolkata"
 }

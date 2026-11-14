@@ -8,8 +8,8 @@
 //       full screen left (incl. pane hidden) and tab switches in this codespace session,
 //       non-whitelisted files ever changed in the repo history, disallowed extensions
 //       (+1 if AI features are switched on).
-//     The two session counts are reset only from Firestore: set field resetAt
-//     (timestamp) in the document <course>/<github user>.
+//     The two session counts reset at midnight (config timezone) and from the monitor app:
+//     field resetAt (timestamp) in <course>/<github user> or <course>/_all.
 //  3. Every event goes to Firestore <course>/<user>/events/<auto id> and to
 //     .proctor/log.jsonl; the repo is committed and pushed after every build and
 //     immediately when a non-whitelisted file changes.
@@ -96,8 +96,10 @@ function logEvent(type, detail = {}, isViolation = false) {
     user: ident.user, repo: ident.repo, codespace: ident.codespace,
     exam: CFG.exam, session: ident.session,
     room: st.get('proctor.room', ''), seat: st.get('proctor.seat', ''),
-    clientTime: now(),
+    clientTime: now(), course: CFG.course,
   };
+  const c = counts();
+  ev.fsCount = c.fs; ev.tabCount = c.tab; ev.filesCount = c.files; ev.extCount = c.ext;
   try {
     fs.mkdirSync(path.join(root, '.proctor'), { recursive: true });
     fs.appendFileSync(path.join(root, '.proctor', 'log.jsonl'), JSON.stringify(ev) + '\n');
@@ -164,8 +166,8 @@ class StripProvider {
     const hidden = (why) => {
       if (C.paneHidden) return;
       C.paneHidden = true;
-      logEvent(why, {}, true);
-      if (ctx.globalState.get('proctor.calibrated', false)) bump('proctor.fsCount'); else render();
+      const done = ctx.globalState.get('proctor.calibrated', false) ? bump('proctor.fsCount') : Promise.resolve(render());
+      done.then(() => logEvent(why, {}, true));
     };
     v.onDidChangeVisibility(() => {
       if (v.visible) { C.paneHidden = false; logEvent('pane_visible'); sendInit(); render(); }
@@ -205,11 +207,11 @@ async function onWebviewMessage(m) {
       break;
     case 'fullscreen':
       if (m.ok) { C.fsNow = false; logEvent('fullscreen_restored', { h: m.h, hMax: m.hMax, awayMs: m.awayMs }); render(); }
-      else { C.fsNow = true; logEvent('fullscreen_left', { h: m.h, hMax: m.hMax }, true); await bump('proctor.fsCount'); }
+      else { C.fsNow = true; await bump('proctor.fsCount'); logEvent('fullscreen_left', { h: m.h, hMax: m.hMax }, true); }
       break;
     case 'visibility':
       if (m.visible) { C.tabHidden = false; logEvent('tab_visible', { awayMs: m.awayMs }); render(); }
-      else { C.tabHidden = true; logEvent('tab_hidden', {}, true); await bump('proctor.tabCount'); }
+      else { C.tabHidden = true; await bump('proctor.tabCount'); logEvent('tab_hidden', {}, true); }
       break;
     case 'zoom':
       logEvent('zoom_changed', { dpr: m.dpr }, true);
@@ -237,6 +239,7 @@ function auditExtensions(first) {
     all.push(id);
     if (!allowed.has(id)) extra.push(id);
   }
+  C.extras = extra;
   if (first) logEvent('extensions_snapshot', { installed: all });
   for (const id of extra) {
     if (!reportedExt.has(id)) { reportedExt.add(id); logEvent('extension_not_allowed', { id }, true); }
@@ -248,9 +251,10 @@ function auditExtensions(first) {
 function auditAI(first) {
   const disabled = vscode.workspace.getConfiguration('chat').get('disableAIFeatures', false);
   if (!disabled) {
+    C.ai = true;
     if (first || !auditAI.flagged) logEvent('ai_features_enabled', {}, true);
     auditAI.flagged = true;
-    C.ai = true; render();
+    render();
   } else { auditAI.flagged = false; C.ai = false; render(); }
 }
 
@@ -332,6 +336,7 @@ async function checkFiles() {
   if (fresh.length) {
     fresh.forEach((f) => known.add(f));
     await ctx.globalState.update('proctor.badFiles', [...known]);
+    C.badFiles = [...known].sort();
     logEvent('file_not_allowed', { files: fresh.slice(0, 50) }, true);
   }
   C.badFiles = [...known].sort();
@@ -340,29 +345,51 @@ async function checkFiles() {
 }
 
 // ---------------------------------------------------------------- reset from Firestore
-async function checkReset() {
+async function readResetAt(docId) {
   const fb = CFG.firebase;
-  const url = CFG.testResetEndpoint ||
+  const url = CFG.testResetEndpoint ? CFG.testResetEndpoint + encodeURIComponent(docId) :
     `https://firestore.googleapis.com/v1/projects/${fb.projectId}/databases/(default)/documents/` +
-    `${encodeURIComponent(CFG.course)}/${encodeURIComponent(ident.user)}?key=${fb.apiKey}`;
-  let doc;
+    `${encodeURIComponent(CFG.course)}/${encodeURIComponent(docId)}?key=${fb.apiKey}`;
   try {
     const r = await fetch(url);
-    if (!r.ok) return;                       // 404: no reset document for this student
-    doc = await r.json();
-  } catch { return; }
-  const f = (doc.fields || {}).resetAt;
-  if (!f) return;
-  const ms = Date.parse(f.timestampValue || f.stringValue || '') || Number(f.integerValue || 0);
+    if (!r.ok) return 0;                     // 404: no reset document
+    const f = ((await r.json()).fields || {}).resetAt;
+    if (!f) return 0;
+    return Date.parse(f.timestampValue || f.stringValue || '') || Number(f.integerValue || 0);
+  } catch { return 0; }
+}
+
+async function resetCounts(type, detail) {
+  const st = ctx.globalState;
+  const before = counts();
+  await st.update('proctor.fsCount', 0);
+  await st.update('proctor.tabCount', 0);
+  logEvent(type, { ...detail, fsBefore: before.fs, tabBefore: before.tab });
+  render();
+}
+
+// Reset from the monitor app: <course>/<user>.resetAt (one student) or
+// <course>/_all.resetAt (whole class); the later of the two wins.
+async function checkReset() {
+  const ms = Math.max(await readResetAt(ident.user), await readResetAt('_all'));
   const st = ctx.globalState;
   if (ms && ms > st.get('proctor.lastReset', 0)) {
-    const before = counts();
     await st.update('proctor.lastReset', ms);
-    await st.update('proctor.fsCount', 0);
-    await st.update('proctor.tabCount', 0);
-    logEvent('reset_applied', { resetAt: new Date(ms).toISOString(), fsBefore: before.fs, tabBefore: before.tab });
-    render();
+    await resetCounts('reset_applied', { resetAt: new Date(ms).toISOString() });
   }
+}
+
+// The session counts start again every day (exam timezone).
+function today() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: CFG.timezone || 'Asia/Kolkata' }).format(new Date());
+}
+async function checkDay() {
+  const st = ctx.globalState;
+  const d = today();
+  const prev = st.get('proctor.countDay', null);
+  if (prev === d) return;
+  await st.update('proctor.countDay', d);
+  if (prev !== null) await resetCounts('daily_reset', { day: d, previousDay: prev });
 }
 
 let lastBuild = 0;
@@ -440,6 +467,7 @@ async function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => { if (e.affectsConfiguration('chat')) auditAI(false); }),
   );
 
+  await checkDay();
   logEvent('session_start', { vscode: vscode.version, platform: process.platform });
   auditExtensions(true);
   auditAI(true);
@@ -452,7 +480,7 @@ async function activate(context) {
   }, 1500);
 
   const poll = async () => {
-    try { await checkBuild(); await checkFiles(); } catch (e) { console.log('[proctor] ' + e.message); }
+    try { await checkDay(); await checkBuild(); await checkFiles(); } catch (e) { console.log('[proctor] ' + e.message); }
     flushQueue();
   };
   const t = setInterval(poll, (CFG.gitPollSeconds || 5) * 1000);
